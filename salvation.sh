@@ -111,7 +111,12 @@ tar_member_exists() {
 add_if_exists() {
   local p
   p="$(relpath "$1")"
-  [[ -e "/$p" ]] && echo "$p"
+
+  if [[ -e "/$p" ]]; then
+    echo "$p"
+  fi
+
+  return 0
 }
 
 make_include_list() {
