@@ -346,72 +346,72 @@ elif command -v rpm >/dev/null 2>&1; then
 fi
 '
 
-  section "04_users_ssh_privilege" "
-echo '[Users with login shells - local /etc/passwd]'
-awk -F: '\''\\$7 ~ /(bash|sh|zsh|ksh)$/ {print \\$1 ":" \\$7}'\'' /etc/passwd 2>/dev/null || true
+  section "04_users_ssh_privilege" '
+echo "[Users with login shells - local /etc/passwd]"
+awk -F: '\''$7 ~ /(bash|sh|zsh|ksh)$/ {print $1 ":" $7}'\'' /etc/passwd 2>/dev/null || true
 echo
 
-echo '[Users with login shells - NSS/domain aware]'
-getent passwd 2>/dev/null | awk -F: '\''\\$7 ~ /(bash|sh|zsh|ksh)$/ {print \\$1 ":" \\$7}'\'' | head -300 || true
+echo "[Users with login shells - NSS/domain aware]"
+getent passwd 2>/dev/null | awk -F: '\''$7 ~ /(bash|sh|zsh|ksh)$/ {print $1 ":" $7}'\'' | head -300 || true
 echo
 
-echo '[UID 0 accounts]'
-getent passwd 2>/dev/null | awk -F: '\''\\$3 == 0 {print}'\'' || true
+echo "[UID 0 accounts]"
+getent passwd 2>/dev/null | awk -F: '\''$3 == 0 {print}'\'' || true
 echo
 
-echo '[sudo/wheel/admin groups]'
+echo "[sudo/wheel/admin groups]"
 getent group sudo 2>/dev/null || true
 getent group wheel 2>/dev/null || true
 getent group admin 2>/dev/null || true
 echo
 
-echo '[authorized user comparison]'
-if [ -n '$AUTHORIZED_USERS_FILE' ] && [ -f '$AUTHORIZED_USERS_FILE' ]; then
-  tmp_current=\\$(mktemp)
-  tmp_auth=\\$(mktemp)
-  getent passwd 2>/dev/null | awk -F: '\''\\$7 ~ /(bash|sh|zsh|ksh)$/ {print \\$1}'\'' | sort -u > "\\$tmp_current"
-  grep -Ev '^\s*(#|$)' '$AUTHORIZED_USERS_FILE' | sort -u > "\\$tmp_auth"
-  echo 'Users with shell not in authorized list:'
-  comm -23 "\\$tmp_current" "\\$tmp_auth" || true
+echo "[authorized user comparison]"
+if [ -n "$AUTHORIZED_USERS_FILE" ] && [ -f "$AUTHORIZED_USERS_FILE" ]; then
+  tmp_current=$(mktemp)
+  tmp_auth=$(mktemp)
+  getent passwd 2>/dev/null | awk -F: '\''$7 ~ /(bash|sh|zsh|ksh)$/ {print $1}'\'' | sort -u > "$tmp_current"
+  grep -Ev "^\\s*(#|$)" "$AUTHORIZED_USERS_FILE" | sort -u > "$tmp_auth"
+  echo "Users with shell not in authorized list:"
+  comm -23 "$tmp_current" "$tmp_auth" || true
   echo
-  echo 'Authorized users not currently found with shell:'
-  comm -13 "\\$tmp_current" "\\$tmp_auth" || true
-  rm -f "\\$tmp_current" "\\$tmp_auth"
+  echo "Authorized users not currently found with shell:"
+  comm -13 "$tmp_current" "$tmp_auth" || true
+  rm -f "$tmp_current" "$tmp_auth"
 else
-  echo 'No authorized_users.txt provided; skipping whitelist comparison.'
+  echo "No authorized_users.txt provided; skipping whitelist comparison."
 fi
 echo
 
-echo '[sudoers files]'
+echo "[sudoers files]"
 ls -la /etc/sudoers /etc/sudoers.d 2>/dev/null || true
 echo
 
-echo '[SSH listening check]'
-ss -tulpn | egrep ':22|sshd|ssh' || echo 'No obvious SSH listener found.'
+echo "[SSH listening check]"
+ss -tulpn | egrep ':22|sshd|ssh' || echo "No obvious SSH listener found."
 echo
 
 if command -v sshd >/dev/null 2>&1 || [ -x /usr/sbin/sshd ] || [ -f /etc/ssh/sshd_config ]; then
-  SSHD_BIN=\\$(command -v sshd 2>/dev/null || echo /usr/sbin/sshd)
-  echo '[sshd syntax test]'
-  "\\$SSHD_BIN" -t 2>&1 || true
+  SSHD_BIN=$(command -v sshd 2>/dev/null || echo /usr/sbin/sshd)
+  echo "[sshd syntax test]"
+  "$SSHD_BIN" -t 2>&1 || true
   echo
-  echo '[Effective SSH config]'
-  "\\$SSHD_BIN" -T 2>&1 | egrep 'port|listenaddress|permitrootlogin|passwordauthentication|pubkeyauthentication|kbdinteractiveauthentication|permitemptypasswords|allowusers|allowgroups|maxauthtries|maxsessions|x11forwarding|allowtcpforwarding|gatewayports|authorizedkeysfile|usepam|subsystem' || true
+  echo "[Effective SSH config]"
+  "$SSHD_BIN" -T 2>&1 | egrep 'port|listenaddress|permitrootlogin|passwordauthentication|pubkeyauthentication|kbdinteractiveauthentication|permitemptypasswords|allowusers|allowgroups|maxauthtries|maxsessions|x11forwarding|allowtcpforwarding|gatewayports|authorizedkeysfile|usepam|subsystem' || true
 else
-  echo 'OpenSSH server config not detected; skipping sshd -t/sshd -T.'
+  echo "OpenSSH server config not detected; skipping sshd -t/sshd -T."
 fi
 echo
 
-echo '[sshd_config.d contents]'
+echo "[sshd_config.d contents]"
 ls -la /etc/ssh/sshd_config.d 2>/dev/null || true
-for f in /etc/ssh/sshd_config.d/*.conf; do
-  [ -f "\\$f" ] && echo "--- \\$f ---" && sed -n '1,180p' "\\$f"
+  for f in /etc/ssh/sshd_config.d/*.conf; do
+  [ -f "$f" ] && echo "--- $f ---" && sed -n '1,180p' "$f"
 done
 echo
 
-echo '[authorized_keys files]'
+echo "[authorized_keys files]"
 find /root /home -maxdepth 3 -name authorized_keys -type f -ls 2>/dev/null || true
-"
+'
 
   section "05_domain_context" '
 echo "[realm]"
