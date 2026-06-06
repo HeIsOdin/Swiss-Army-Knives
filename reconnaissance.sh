@@ -73,7 +73,7 @@ section() {
     echo "TIME: $(date)"
     echo "================================================================"
     echo
-    bash -lc "$cmd" 2>&1
+    AUTHORIZED_USERS_FILE="$AUTHORIZED_USERS_FILE" SNAP="$SNAP" BACKUP="$BACKUP" BASE="$BASE" bash -lc "$cmd" 2>&1
   } >> "$REPORT"
 }
 
@@ -348,15 +348,15 @@ fi
 
   section "04_users_ssh_privilege" '
 echo "[Users with login shells - local /etc/passwd]"
-awk -F: '\''$7 ~ /(bash|sh|zsh|ksh)$/ {print $1 ":" $7}'\'' /etc/passwd 2>/dev/null || true
+awk -F: "\$7 ~ /(bash|sh|zsh|ksh)$/ {print \$1 \":\" \$7}" /etc/passwd 2>/dev/null || true
 echo
 
 echo "[Users with login shells - NSS/domain aware]"
-getent passwd 2>/dev/null | awk -F: '\''$7 ~ /(bash|sh|zsh|ksh)$/ {print $1 ":" $7}'\'' | head -300 || true
+getent passwd 2>/dev/null | awk -F: "\$7 ~ /(bash|sh|zsh|ksh)$/ {print \$1 \":\" \$7}" | head -300 || true
 echo
 
 echo "[UID 0 accounts]"
-getent passwd 2>/dev/null | awk -F: '\''$3 == 0 {print}'\'' || true
+getent passwd 2>/dev/null | awk -F: "\$3 == 0 {print}" || true
 echo
 
 echo "[sudo/wheel/admin groups]"
@@ -369,8 +369,8 @@ echo "[authorized user comparison]"
 if [ -n "$AUTHORIZED_USERS_FILE" ] && [ -f "$AUTHORIZED_USERS_FILE" ]; then
   tmp_current=$(mktemp)
   tmp_auth=$(mktemp)
-  getent passwd 2>/dev/null | awk -F: '\''$7 ~ /(bash|sh|zsh|ksh)$/ {print $1}'\'' | sort -u > "$tmp_current"
-  grep -Ev "^\\s*(#|$)" "$AUTHORIZED_USERS_FILE" | sort -u > "$tmp_auth"
+  getent passwd 2>/dev/null | awk -F: "\$7 ~ /(bash|sh|zsh|ksh)$/ {print \$1}" | sort -u > "$tmp_current"
+  grep -Ev "^[[:space:]]*(#|$)" "$AUTHORIZED_USERS_FILE" | sort -u > "$tmp_auth"
   echo "Users with shell not in authorized list:"
   comm -23 "$tmp_current" "$tmp_auth" || true
   echo
@@ -387,7 +387,7 @@ ls -la /etc/sudoers /etc/sudoers.d 2>/dev/null || true
 echo
 
 echo "[SSH listening check]"
-ss -tulpn | egrep ':22|sshd|ssh' || echo "No obvious SSH listener found."
+ss -tulpn | egrep ":22|sshd|ssh" || echo "No obvious SSH listener found."
 echo
 
 if command -v sshd >/dev/null 2>&1 || [ -x /usr/sbin/sshd ] || [ -f /etc/ssh/sshd_config ]; then
@@ -396,7 +396,7 @@ if command -v sshd >/dev/null 2>&1 || [ -x /usr/sbin/sshd ] || [ -f /etc/ssh/ssh
   "$SSHD_BIN" -t 2>&1 || true
   echo
   echo "[Effective SSH config]"
-  "$SSHD_BIN" -T 2>&1 | egrep 'port|listenaddress|permitrootlogin|passwordauthentication|pubkeyauthentication|kbdinteractiveauthentication|permitemptypasswords|allowusers|allowgroups|maxauthtries|maxsessions|x11forwarding|allowtcpforwarding|gatewayports|authorizedkeysfile|usepam|subsystem' || true
+  "$SSHD_BIN" -T 2>&1 | egrep "port|listenaddress|permitrootlogin|passwordauthentication|pubkeyauthentication|kbdinteractiveauthentication|permitemptypasswords|allowusers|allowgroups|maxauthtries|maxsessions|x11forwarding|allowtcpforwarding|gatewayports|authorizedkeysfile|usepam|subsystem" || true
 else
   echo "OpenSSH server config not detected; skipping sshd -t/sshd -T."
 fi
@@ -404,8 +404,8 @@ echo
 
 echo "[sshd_config.d contents]"
 ls -la /etc/ssh/sshd_config.d 2>/dev/null || true
-  for f in /etc/ssh/sshd_config.d/*.conf; do
-  [ -f "$f" ] && echo "--- $f ---" && sed -n '1,180p' "$f"
+for f in /etc/ssh/sshd_config.d/*.conf; do
+  [ -f "$f" ] && echo "--- $f ---" && sed -n "1,180p" "$f"
 done
 echo
 
