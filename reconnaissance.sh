@@ -331,7 +331,7 @@ fi
 echo
 
 echo "[Web/security relevant process list]"
-ps auxww | egrep -i "apache|nginx|httpd|caddy|php|php-fpm|node|npm|pm2|gunicorn|uwsgi|tomcat|flask|django|python|perl|ruby|java|bash|sh|nc |ncat|socat|curl|wget|ssh|cron" | grep -v egrep || true
+ps auxww | egrep -i "apache|nginx|httpd|caddy|php|php-fpm|node|npm|pm2|gunicorn|uwsgi|tomcat|flask|django|python|perl|ruby|java|(^|/)(bash|sh)( |$)|nc |ncat|socat|curl|wget|ssh|cron" | grep -Ev "egrep|grep -E -i" || true
 echo
 
 echo "[Top processes]"
@@ -622,35 +622,47 @@ find /var/www /srv /opt -maxdepth 5 \
 
   section "11_webserver_effective_config" '
 echo "[Detected web server candidates]"
-ps auxww | egrep -i "nginx|apache|httpd|caddy|node|pm2|gunicorn|uwsgi|tomcat|flask|django|rails|puma" | grep -v egrep || true
+ps auxww | egrep -i "nginx|apache|httpd|caddy|node|pm2|gunicorn|uwsgi|tomcat|flask|django|rails|puma" | grep -Ev "egrep|grep -E -i|fusermount" || true
 echo
 
-if command -v nginx >/dev/null 2>&1 || ps auxww | grep -E "nginx: master|nginx: worker" | grep -vq grep || [ -d /etc/nginx ]; then
-  echo "[nginx detected: nginx -t]"
-  nginx -t 2>&1 || true
-  echo
-  echo "[nginx detected: important directives from nginx -T]"
-  nginx -T 2>&1 | egrep -n "server_name|listen|root |alias |index |try_files|proxy_pass|fastcgi_pass|uwsgi_pass|location |auth_basic|allow |deny |autoindex|client_max_body_size|access_log|error_log|include " | head -500 || true
+if command -v nginx >/dev/null 2>&1 || pgrep -x nginx >/dev/null 2>&1 || [ -d /etc/nginx ]; then
+  echo "[nginx detected/configured: nginx -t]"
+  if command -v nginx >/dev/null 2>&1; then
+    nginx -t 2>&1 || true
+    echo
+    echo "[nginx detected/configured: important directives from nginx -T]"
+    nginx -T 2>&1 | egrep -n "server_name|listen|root |alias |index |try_files|proxy_pass|fastcgi_pass|uwsgi_pass|location |auth_basic|allow |deny |autoindex|client_max_body_size|access_log|error_log|include " | head -500 || true
+  else
+    echo "nginx config directory/process evidence exists, but nginx binary was not found; skipping nginx -t/nginx -T."
+  fi
 else
   echo "nginx not detected as installed/configured/running; skipping nginx -t/nginx -T."
 fi
 
 echo
-if command -v apache2ctl >/dev/null 2>&1 || command -v apachectl >/dev/null 2>&1 || ps auxww | egrep -q "apache2|httpd" || [ -d /etc/apache2 ] || [ -d /etc/httpd ]; then
-  echo "[Apache/httpd detected: config test]"
+if command -v apache2ctl >/dev/null 2>&1 || command -v apachectl >/dev/null 2>&1 || pgrep -x apache2 >/dev/null 2>&1 || pgrep -x httpd >/dev/null 2>&1; then
+  echo "[Apache/httpd active or binary present: config test]"
   command -v apache2ctl >/dev/null 2>&1 && apache2ctl configtest 2>&1 || true
   command -v apachectl >/dev/null 2>&1 && apachectl configtest 2>&1 || true
   echo
-  echo "[Apache/httpd detected: enabled sites/modules summary]"
+  echo "[Apache/httpd enabled sites/modules summary]"
+  ls -la /etc/apache2/sites-enabled /etc/apache2/mods-enabled /etc/httpd/conf.d 2>/dev/null || true
+elif [ -d /etc/apache2 ] || [ -d /etc/httpd ]; then
+  echo "Apache/httpd config directory present, but no active Apache/httpd process or config-test binary was found."
+  echo "[Apache/httpd config directory summary]"
   ls -la /etc/apache2/sites-enabled /etc/apache2/mods-enabled /etc/httpd/conf.d 2>/dev/null || true
 else
   echo "Apache/httpd not detected; skipping Apache config test."
 fi
 
 echo
-if command -v caddy >/dev/null 2>&1 || ps auxww | egrep -q "caddy" || [ -d /etc/caddy ]; then
-  echo "[Caddy detected]"
-  caddy validate --config /etc/caddy/Caddyfile 2>&1 || true
+if command -v caddy >/dev/null 2>&1 || pgrep -x caddy >/dev/null 2>&1 || [ -d /etc/caddy ]; then
+  echo "[Caddy evidence found]"
+  if command -v caddy >/dev/null 2>&1; then
+    caddy validate --config /etc/caddy/Caddyfile 2>&1 || true
+  else
+    echo "caddy binary not found; skipping Caddy validation."
+  fi
   sed -n "1,220p" /etc/caddy/Caddyfile 2>/dev/null || true
 else
   echo "Caddy not detected; skipping Caddy validation."
