@@ -1,14 +1,21 @@
 #!/usr/bin/env bash
-# eCitadel web backup tool
+# eCitadel web backup/compare/restore helper ("salvation")
 #
 # Commands:
-#   backup   - create local_only/TIMESTAMP/rootfs.tar
+#   backup   - create local_only/TIMESTAMP/rootfs.tar and local_only/TIMESTAMP/salvation_report.txt
 #   compare  - compare latest/rootfs.tar, or a supplied tarball, against the live server
 #   restore  - restore selected paths; if no --path is given, restore the whole tarball
 #   list     - list tarball contents
 #   latest   - print the latest backup directory
 #
-# Plain tar only. Web server only.
+# Design:
+#   - Plain tar only.
+#   - Web server only for now.
+#   - If --tar is not passed, compare/restore/list use local_only/latest/rootfs.tar.
+#   - Restore never deletes the backup tarball.
+#   - Restore creates a pre-restore tarball of current live files before overwriting them.
+#   - Each backup directory keeps one main text file: salvation_report.txt.
+#   - Compare prints changed files to stdout and also appends them to salvation_report.txt.
 
 set -euo pipefail
 
@@ -25,7 +32,7 @@ COMMAND="${1:-}"
 shift || true
 
 TAR_PATH=""
-OUT_DIR=""
+OUT_REPORT=""
 EXTRA_INCLUDE=()
 RESTORE_PATHS=()
 
@@ -36,20 +43,24 @@ usage() {
   cat <<'EOF'
 Usage:
   sudo ./salvation.sh backup [--base DIR] [--include /extra/path]
-  sudo ./salvation.sh compare [--base DIR] [--tar /path/to/rootfs.tar] [--out DIR]
+
+  sudo ./salvation.sh compare [--base DIR] [--tar /path/to/rootfs.tar] [--report /path/to/report.txt]
+
   sudo ./salvation.sh restore [--base DIR] [--tar /path/to/rootfs.tar] [--path etc/nginx/nginx.conf] [--path var/www/html/index.html]
+      If no --path is given, restore extracts the whole tarball.
+
        ./salvation.sh list [--base DIR] [--tar /path/to/rootfs.tar]
        ./salvation.sh latest [--base DIR]
 
 Defaults:
   --tar defaults to <base>/local_only/latest/rootfs.tar for compare, restore, and list.
-  restore with no --path restores the whole tarball.
+  --report defaults to salvation_report.txt beside the selected tarball.
 
 Options:
   --base DIR       Base directory. Default: $ECITADEL_REPO or ~/ecitadel_www_repo
   --include PATH   Extra absolute path to include during backup. Can be repeated.
   --tar PATH       Backup tarball path.
-  --out DIR        Compare output directory.
+  --report PATH    Text report path for compare/restore. Default: dirname(rootfs.tar)/salvation_report.txt
   --path RELPATH   Restore path inside tarball, relative to /. Can be repeated.
 EOF
 }
@@ -60,7 +71,7 @@ parse_args() {
       --base) BASE="${2:-}"; shift 2 ;;
       --include) EXTRA_INCLUDE+=("${2:-}"); shift 2 ;;
       --tar) TAR_PATH="${2:-}"; shift 2 ;;
-      --out) OUT_DIR="${2:-}"; shift 2 ;;
+      --report) OUT_REPORT="${2:-}"; shift 2 ;;
       --path) RESTORE_PATHS+=("${2:-}"); shift 2 ;;
       -h|--help) usage; exit 0 ;;
       *) die "Unknown option: $1" ;;
@@ -83,6 +94,28 @@ resolve_tar_path() {
   [[ -f "$TAR_PATH" ]] || die "Tarball not found: $TAR_PATH"
 }
 
+report_path_for_tar() {
+  if [[ -n "$OUT_REPORT" ]]; then
+    echo "$OUT_REPORT"
+  else
+    echo "$(dirname "$TAR_PATH")/salvation_report.txt"
+  fi
+}
+
+append_section() {
+  local report="$1"
+  local title="$2"
+  mkdir -p "$(dirname "$report")"
+  {
+    echo
+    echo "================================================================"
+    echo "SECTION: $title"
+    echo "TIME: $(date -Is)"
+    echo "================================================================"
+    echo
+  } >> "$report"
+}
+
 relpath() {
   local p="$1"
   p="${p#./}"
@@ -100,6 +133,12 @@ safe_restore_path() {
 
 tar_list() {
   tar -tf "$1" | sed 's#^\./##; s#^/##'
+}
+
+tar_regular_files() {
+  tar -tvf "$1" 2>/dev/null \
+    | awk '$1 ~ /^-/ {for (i=6; i<=NF; i++) printf "%s%s", $i, (i==NF ? ORS : OFS)}' \
+    | sed 's#^\./##; s#^/##'
 }
 
 tar_member_exists() {
@@ -156,11 +195,12 @@ make_include_list() {
 backup_cmd() {
   need_root
 
-  local ts dir include tarball
+  local ts dir include tarball report
   ts="$(date +%F_%H%M%S)"
   dir="$BASE/local_only/$ts"
-  include="$dir/include_paths.txt"
+  include="$(mktemp)"
   tarball="$dir/rootfs.tar"
+  report="$dir/salvation_report.txt"
 
   mkdir -p "$dir"
   make_include_list > "$include"
@@ -187,23 +227,35 @@ backup_cmd() {
     --exclude='VBoxGuestAdditions-*' \
     --files-from "$include"
 
-  tar -tf "$tarball" > "$dir/tar_list.txt"
-
   {
-    echo "time=$(date -Is)"
+    echo "eCitadel Salvation Report"
     echo "host=$(hostname -f 2>/dev/null || hostname)"
-    echo "tarball=$tarball"
+    echo "created=$(date -Is)"
     echo "base=$BASE"
-    echo
-    echo "included_paths:"
-    sed 's/^/  /' "$include"
-  } > "$dir/backup_notes.txt"
+    echo "backup_dir=$dir"
+    echo "tarball=$tarball"
+  } > "$report"
+
+  append_section "$report" "BACKUP_SUMMARY"
+  {
+    echo "tarball=$tarball"
+    echo "tarball_size_bytes=$(stat -c %s "$tarball" 2>/dev/null || echo unknown)"
+    echo "latest_symlink=$BASE/local_only/latest"
+  } >> "$report"
+
+  append_section "$report" "BACKUP_INCLUDED_ROOTS"
+  sed 's/^/  /' "$include" >> "$report"
+
+  append_section "$report" "BACKUP_TAR_CONTENTS"
+  tar -tf "$tarball" >> "$report"
 
   ln -sfn "$ts" "$BASE/local_only/latest"
+  rm -f "$include"
 
   log "Backup complete."
   echo "Backup directory: $dir"
   echo "Tarball: $tarball"
+  echo "Report: $report"
 }
 
 is_text_candidate() {
@@ -213,96 +265,201 @@ is_text_candidate() {
   return 1
 }
 
-safe_name() {
-  echo "$1" | sed 's#/#_#g; s#[^A-Za-z0-9._-]#_#g'
+tar_has_path_prefix() {
+  local paths_file="$1"
+  local root="$2"
+  awk -v r="$root" '$0 == r || index($0, r "/") == 1 {found=1} END {exit found ? 0 : 1}' "$paths_file"
+}
+
+build_compare_scope() {
+  local paths_file="$1"
+  local scope_file="$2"
+
+  : > "$scope_file"
+
+  local roots=(
+    "etc/nginx"
+    "etc/apache2"
+    "etc/httpd"
+    "etc/caddy"
+    "etc/php"
+    "etc/php-fpm.d"
+    "etc/ssh"
+    "etc/systemd/system"
+    "etc/sssd"
+    "etc/krb5.conf"
+    "etc/samba/smb.conf"
+    "etc/ufw"
+    "etc/iptables"
+    "etc/firewalld"
+    "etc/nftables.conf"
+    "var/www"
+    "srv"
+    "opt"
+    "usr/local/bin"
+    "usr/local/sbin"
+    "root/.ssh"
+  )
+
+  local r
+  for r in "${roots[@]}"; do
+    if tar_has_path_prefix "$paths_file" "$r"; then
+      echo "$r" >> "$scope_file"
+    fi
+  done
+
+  awk '
+    $0 ~ /^home\/[^/]+\/\.ssh($|\/)/ {
+      split($0, a, "/");
+      print a[1] "/" a[2] "/" a[3];
+    }
+  ' "$paths_file" >> "$scope_file"
+
+  sort -u "$scope_file" -o "$scope_file"
+}
+
+scan_live_scope() {
+  local scope_file="$1"
+  local live_file="$2"
+
+  : > "$live_file"
+
+  while IFS= read -r root; do
+    [[ -n "$root" ]] || continue
+
+    if [[ -f "/$root" || -L "/$root" ]]; then
+      echo "$root" >> "$live_file"
+    elif [[ -d "/$root" ]]; then
+      find "/$root" \
+        \( -path "*/ecitadel_www_repo/*" \
+           -o -path "*/local_only/*" \
+           -o -path "/opt/VBoxGuestAdditions-*" \
+           -o -path "/srv/www/biafra/*" \) -prune -o \
+        \( -type f -o -type l \) -print 2>/dev/null \
+        | sed 's#^/##' >> "$live_file" || true
+    fi
+  done < "$scope_file"
+
+  sort -u "$live_file" -o "$live_file"
 }
 
 compare_cmd() {
   need_root
   resolve_tar_path
 
-  local ts out backup_files live_files
+  local report ts all_paths backup_files backup_regular_files live_files scope_file changed_files changed_text_files missing_files new_live_files suspicious_new_files binary_changed tar_raw
+  report="$(report_path_for_tar)"
   ts="$(date +%F_%H%M%S)"
 
-  if [[ -z "$OUT_DIR" ]]; then
-    OUT_DIR="$(dirname "$TAR_PATH")/compare_$ts"
-  fi
+  all_paths="$(mktemp)"
+  backup_files="$(mktemp)"
+  backup_regular_files="$(mktemp)"
+  live_files="$(mktemp)"
+  scope_file="$(mktemp)"
+  changed_files="$(mktemp)"
+  changed_text_files="$(mktemp)"
+  missing_files="$(mktemp)"
+  new_live_files="$(mktemp)"
+  suspicious_new_files="$(mktemp)"
+  binary_changed="$(mktemp)"
+  tar_raw="$(mktemp)"
 
-  out="$OUT_DIR"
-  mkdir -p "$out/text_diffs"
+  tar_list "$TAR_PATH" | sort -u > "$all_paths"
+  tar_list "$TAR_PATH" | grep -Ev '/$' | sort -u > "$backup_files" || true
+  tar_regular_files "$TAR_PATH" | sort -u > "$backup_regular_files" || true
 
-  log "Comparing backup to live filesystem"
-  log "Tarball: $TAR_PATH"
-  log "Output: $out"
+  build_compare_scope "$all_paths" "$scope_file"
+  scan_live_scope "$scope_file" "$live_files"
 
-  tar -C / -df "$TAR_PATH" > "$out/tar_compare_raw.txt" 2>&1 || true
+  tar -C / -df "$TAR_PATH" > "$tar_raw" 2>&1 || true
 
-  backup_files="$out/backup_files.txt"
-  live_files="$out/live_files.txt"
-
-  tar_list "$TAR_PATH" | grep -Ev '/$' | sort -u > "$backup_files"
-
-  {
-    for d in /etc /var/www /srv /opt /usr/local/bin /usr/local/sbin /root/.ssh /home; do
-      [[ -e "$d" ]] || continue
-      find "$d" \
-        \( -path "*/ecitadel_www_repo/*" \
-           -o -path "*/local_only/*" \
-           -o -path "/opt/VBoxGuestAdditions-*" \
-           -o -path "/srv/www/biafra/*" \) -prune -o \
-        -type f -print 2>/dev/null
-    done
-  } | sed 's#^/##' | sort -u > "$live_files"
-
-  comm -23 "$backup_files" "$live_files" > "$out/missing_files.txt" || true
-  comm -13 "$backup_files" "$live_files" > "$out/new_live_files.txt" || true
+  comm -23 "$backup_files" "$live_files" > "$missing_files" || true
+  comm -13 "$backup_files" "$live_files" > "$new_live_files" || true
 
   grep -Ei '(\.php|\.phtml|\.jsp|\.war|\.py|\.sh|\.pl|\.cgi|\.so|\.service|\.timer|authorized_keys|\.env|\.bak|\.old|\.save|\.sql|\.db|\.sqlite|\.sqlite3)$' \
-    "$out/new_live_files.txt" > "$out/suspicious_new_files.txt" || true
+    "$new_live_files" > "$suspicious_new_files" || true
 
-  : > "$out/changed_files.txt"
-  : > "$out/changed_text_files.txt"
-  : > "$out/binary_or_unreadable_changed_files.txt"
+  : > "$changed_files"
+  : > "$changed_text_files"
+  : > "$binary_changed"
 
   while IFS= read -r p; do
     [[ -f "/$p" ]] || continue
 
     if ! cmp -s <(tar -xOf "$TAR_PATH" "$p" 2>/dev/null) "/$p"; then
-      echo "$p" >> "$out/changed_files.txt"
+      echo "$p" >> "$changed_files"
 
       if is_text_candidate "$p" && file -b --mime-type "/$p" 2>/dev/null | grep -Eq 'text|json|xml|x-shellscript|javascript|x-php|x-python'; then
-        echo "$p" >> "$out/changed_text_files.txt"
-        diff -u <(tar -xOf "$TAR_PATH" "$p" 2>/dev/null) "/$p" \
-          > "$out/text_diffs/$(safe_name "$p").diff" || true
+        echo "$p" >> "$changed_text_files"
       else
-        echo "$p" >> "$out/binary_or_unreadable_changed_files.txt"
+        echo "$p" >> "$binary_changed"
       fi
     fi
-  done < "$backup_files"
+  done < "$backup_regular_files"
 
+  log "Compare complete."
+  echo "Tarball: $TAR_PATH"
+  echo "Report: $report"
+  echo
+  echo "Changed files:"
+  if [[ -s "$changed_files" ]]; then
+    cat "$changed_files"
+  else
+    echo "  none"
+  fi
+
+  append_section "$report" "COMPARE_${ts}_SUMMARY"
   {
-    echo "Backup compare summary"
-    echo "time=$(date -Is)"
     echo "tarball=$TAR_PATH"
-    echo
-    echo "changed_files=$(wc -l < "$out/changed_files.txt")"
-    echo "changed_text_files=$(wc -l < "$out/changed_text_files.txt")"
-    echo "missing_files=$(wc -l < "$out/missing_files.txt")"
-    echo "new_live_files=$(wc -l < "$out/new_live_files.txt")"
-    echo "suspicious_new_files=$(wc -l < "$out/suspicious_new_files.txt")"
-    echo
-    echo "review_order:"
-    echo "  1. $out/suspicious_new_files.txt"
-    echo "  2. $out/changed_text_files.txt"
-    echo "  3. $out/text_diffs/"
-    echo "  4. $out/missing_files.txt"
-    echo "  5. $out/tar_compare_raw.txt"
-  } > "$out/summary.txt"
+    echo "changed_files=$(wc -l < "$changed_files")"
+    echo "changed_text_files=$(wc -l < "$changed_text_files")"
+    echo "missing_files=$(wc -l < "$missing_files")"
+    echo "new_live_files=$(wc -l < "$new_live_files")"
+    echo "suspicious_new_files=$(wc -l < "$suspicious_new_files")"
+  } >> "$report"
 
-  cat "$out/summary.txt"
+  append_section "$report" "COMPARE_${ts}_SCOPE_ROOTS"
+  cat "$scope_file" >> "$report"
+
+  append_section "$report" "COMPARE_${ts}_CHANGED_FILES"
+  if [[ -s "$changed_files" ]]; then cat "$changed_files" >> "$report"; else echo "none" >> "$report"; fi
+
+  append_section "$report" "COMPARE_${ts}_CHANGED_TEXT_FILES"
+  if [[ -s "$changed_text_files" ]]; then cat "$changed_text_files" >> "$report"; else echo "none" >> "$report"; fi
+
+  append_section "$report" "COMPARE_${ts}_BINARY_OR_UNREADABLE_CHANGED_FILES"
+  if [[ -s "$binary_changed" ]]; then cat "$binary_changed" >> "$report"; else echo "none" >> "$report"; fi
+
+  append_section "$report" "COMPARE_${ts}_MISSING_FILES"
+  if [[ -s "$missing_files" ]]; then cat "$missing_files" >> "$report"; else echo "none" >> "$report"; fi
+
+  append_section "$report" "COMPARE_${ts}_NEW_LIVE_FILES"
+  if [[ -s "$new_live_files" ]]; then cat "$new_live_files" >> "$report"; else echo "none" >> "$report"; fi
+
+  append_section "$report" "COMPARE_${ts}_SUSPICIOUS_NEW_LIVE_FILES"
+  if [[ -s "$suspicious_new_files" ]]; then cat "$suspicious_new_files" >> "$report"; else echo "none" >> "$report"; fi
+
+  append_section "$report" "COMPARE_${ts}_TAR_COMPARE_RAW"
+  if [[ -s "$tar_raw" ]]; then cat "$tar_raw" >> "$report"; else echo "none" >> "$report"; fi
+
+  append_section "$report" "COMPARE_${ts}_TEXT_DIFFS"
+  if [[ -s "$changed_text_files" ]]; then
+    while IFS= read -r p; do
+      echo
+      echo "----------------------------------------------------------------"
+      echo "DIFF: $p"
+      echo "----------------------------------------------------------------"
+      diff -u <(tar -xOf "$TAR_PATH" "$p" 2>/dev/null) "/$p" || true
+    done < "$changed_text_files" >> "$report"
+  else
+    echo "none" >> "$report"
+  fi
+
+  rm -f "$all_paths" "$backup_files" "$backup_regular_files" "$live_files" "$scope_file" "$changed_files" "$changed_text_files" "$missing_files" "$new_live_files" "$suspicious_new_files" "$binary_changed" "$tar_raw"
 }
 
 make_pre_restore_backup() {
+  local report="$1"
   local safety_tar="$BASE/local_only/pre_restore_$(date +%F_%H%M%S).tar"
   local tmp_list
   tmp_list="$(mktemp)"
@@ -320,6 +477,9 @@ make_pre_restore_backup() {
   if [[ -s "$tmp_list" ]]; then
     log "Creating pre-restore backup of current live files: $safety_tar"
     tar --xattrs --acls --selinux --numeric-owner -C / -cpf "$safety_tar" --files-from "$tmp_list" 2>/dev/null || true
+    echo "$safety_tar" >> "$report"
+  else
+    echo "No existing live files found for pre-restore backup." >> "$report"
   fi
 
   rm -f "$tmp_list"
@@ -329,8 +489,10 @@ restore_cmd() {
   need_root
   resolve_tar_path
 
-  local normalized=()
-  local p
+  local report ts p
+  report="$(report_path_for_tar)"
+  ts="$(date +%F_%H%M%S)"
+  normalized=()
 
   for p in "${RESTORE_PATHS[@]}"; do
     p="$(relpath "$p")"
@@ -340,27 +502,36 @@ restore_cmd() {
   done
   RESTORE_PATHS=("${normalized[@]}")
 
-  echo "Restore plan"
-  echo "tarball=$TAR_PATH"
+  append_section "$report" "RESTORE_${ts}_PLAN"
+  {
+    echo "tarball=$TAR_PATH"
+    if [[ "${#RESTORE_PATHS[@]}" -eq 0 ]]; then
+      echo "scope=whole tarball"
+    else
+      echo "scope=selected paths"
+      printf '  %s\n' "${RESTORE_PATHS[@]}"
+    fi
+    echo
+    echo "pre_restore_backup:"
+  } >> "$report"
 
-  if [[ "${#RESTORE_PATHS[@]}" -eq 0 ]]; then
-    echo "scope=whole tarball"
-  else
-    echo "scope=selected paths"
-    printf '  %s\n' "${RESTORE_PATHS[@]}"
-  fi
-
-  make_pre_restore_backup
+  make_pre_restore_backup "$report"
 
   log "Restoring. Backup tarball will not be deleted."
-
   if [[ "${#RESTORE_PATHS[@]}" -eq 0 ]]; then
     tar --xattrs --acls --selinux --numeric-owner -C / -xpf "$TAR_PATH"
   else
     tar --xattrs --acls --selinux --numeric-owner -C / -xpf "$TAR_PATH" "${RESTORE_PATHS[@]}"
   fi
 
+  append_section "$report" "RESTORE_${ts}_RESULT"
+  {
+    echo "restore_status=completed"
+    echo "completed=$(date -Is)"
+  } >> "$report"
+
   log "Restore complete."
+  echo "Report: $report"
 }
 
 latest_cmd() {
