@@ -346,7 +346,7 @@ elif command -v rpm >/dev/null 2>&1; then
 fi
 '
 
-  section "04_users_ssh_privilege" '
+  section "04_users_ssh_privilege" "
 echo '[Users with login shells - local /etc/passwd]'
 awk -F: '\''\\$7 ~ /(bash|sh|zsh|ksh)$/ {print \\$1 ":" \\$7}'\'' /etc/passwd 2>/dev/null || true
 echo
