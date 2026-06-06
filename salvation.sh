@@ -132,11 +132,11 @@ safe_restore_path() {
 }
 
 tar_list() {
-  tar -tf "$1" | sed 's#^\./##; s#^/##'
+  tar --quoting-style=literal -tf "$1" | sed 's#^\./##; s#^/##'
 }
 
 tar_regular_files() {
-  tar -tvf "$1" 2>/dev/null \
+  tar --quoting-style=literal -tvf "$1" 2>/dev/null \
     | awk '$1 ~ /^-/ {for (i=6; i<=NF; i++) printf "%s%s", $i, (i==NF ? ORS : OFS)}' \
     | sed 's#^\./##; s#^/##'
 }
@@ -247,7 +247,7 @@ backup_cmd() {
   sed 's/^/  /' "$include" >> "$report"
 
   append_section "$report" "BACKUP_TAR_CONTENTS"
-  tar -tf "$tarball" >> "$report"
+  tar --quoting-style=literal -tf "$tarball" >> "$report"
 
   ln -sfn "$ts" "$BASE/local_only/latest"
   rm -f "$include"
@@ -333,8 +333,7 @@ scan_live_scope() {
       find "/$root" \
         \( -path "*/ecitadel_www_repo/*" \
            -o -path "*/local_only/*" \
-           -o -path "/opt/VBoxGuestAdditions-*" \
-           -o -path "/srv/www/biafra/*" \) -prune -o \
+           -o -path "/opt/VBoxGuestAdditions-*" \) -prune -o \
         \( -type f -o -type l \) -print 2>/dev/null \
         | sed 's#^/##' >> "$live_file" || true
     fi
@@ -371,7 +370,7 @@ compare_cmd() {
   build_compare_scope "$all_paths" "$scope_file"
   scan_live_scope "$scope_file" "$live_files"
 
-  tar -C / -df "$TAR_PATH" > "$tar_raw" 2>&1 || true
+  tar --quoting-style=literal -C / -df "$TAR_PATH" > "$tar_raw" 2>&1 || true
 
   comm -23 "$backup_files" "$live_files" > "$missing_files" || true
   comm -13 "$backup_files" "$live_files" > "$new_live_files" || true
@@ -490,9 +489,9 @@ restore_cmd() {
   resolve_tar_path
 
   local report ts p
+  local normalized=()
   report="$(report_path_for_tar)"
   ts="$(date +%F_%H%M%S)"
-  normalized=()
 
   for p in "${RESTORE_PATHS[@]}"; do
     p="$(relpath "$p")"
@@ -542,7 +541,7 @@ latest_cmd() {
 
 list_cmd() {
   resolve_tar_path
-  tar -tf "$TAR_PATH"
+  tar --quoting-style=literal -tf "$TAR_PATH"
 }
 
 main() {
